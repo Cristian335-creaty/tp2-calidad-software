@@ -1,52 +1,99 @@
 name: CI with Maven and Horusec
 
 on:
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+  # Auto-run on pushes/PRs to these branches
   push:
-    branches: [ "main", "feature/Horusec" ]
+    branches: [main, develop, "feature/**"]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   build_and_scan:
     runs-on: ubuntu-latest
 
     steps:
+      # 1) Checkout the repository
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v3
+      # 2) Set up Temurin JDK 8 with Maven cache
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          distribution: temurin
+          java-version: "8"
+          cache: maven
 
+      # 3) Build with Maven
       - name: Build with Maven
-        run: mvn -B clean package --file pom.xml
+        run: mvn -B package --file pom.xml
 
-      - name: Install Horusec CLI
+      # 4) Install Horusec CLI (beta) on the runner
+      - name: Install Horusec CLI (beta)
         run: |
-          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash -s "v2.9.0-beta.3"
+          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/master/deployments/scripts/install.sh \
+            | bash -s latest-beta
+          horusec version
 
-      - name: Run Horusec (no fail)
+      # 5) Run Horusec on the host workspace
+      #    --return-error=false ensures Horusec never fails this step directly.
+      #    Our gating step below decides pass/fail based on severity.
+      - name: Run Horusec (host CLI)
         run: |
-          horusec start -p="./" \
-            -c="horusec-config.json" \
+          set -euxo pipefail
+          horusec start \
+            -p . \
+            --config-file-path ./horusec-config.json \
+            --output-format json \
+            --json-output-file horusec-report.json \
+            --information-severity=true \
             --return-error=false \
-            --json-output-file="horusec-report.json"
+            -t 600
+          ls -la horusec-report.json
 
+      # 6) Install jq to parse the JSON report
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # 7) Gate the pipeline on severity
+      #    - Parse the JSON robustly (handles both `vulnerability` and `vulnerabilities` keys).
+      #    - Fail the pipeline if HIGH or CRITICAL are found.
       - name: Gate on HIGH/CRITICAL
         run: |
-          CRIT=$(jq '[.analysisVulnerabilities[].vulnerabilities.severity | select(.=="CRITICAL")] | length' horusec-report.json)
-          HIGH=$(jq '[.analysisVulnerabilities[].vulnerabilities.severity | select(.=="HIGH")] | length' horusec-report.json)
-          echo "Found CRITICAL=$CRIT HIGH=$HIGH"
-          if [ "$CRIT" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
-            echo "High or Critical vulnerabilities found!"
+          set -euo pipefail
+          test -s horusec-report.json || { echo "horusec-report.json missing or empty"; exit 1; }
+
+          echo "Severity histogram:"
+          jq -r '
+            (.analysisVulnerabilities // [])
+            | map(.vulnerability // .vulnerabilities // .)
+            | group_by(.severity)
+            | map({ (.[0].severity): length })
+            | add // {}
+          ' horusec-report.json
+
+          HIGH_CRIT=$(
+            jq '
+              (.analysisVulnerabilities // [])
+              | map(.vulnerability // .vulnerabilities // .)
+              | map(select(.severity=="HIGH" or .severity=="CRITICAL"))
+              | length
+            ' horusec-report.json
+          )
+
+          echo "Number of HIGH/CRITICAL: ${HIGH_CRIT}"
+          if [ "${HIGH_CRIT}" -gt 0 ]; then
+            echo "❌ Failing: HIGH/CRITICAL findings present."
             exit 1
+          else
+            echo "✅ No HIGH/CRITICAL findings."
           fi
 
+      # 8) Always upload the Horusec report (even if the gate failed)
       - name: Upload Horusec report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: horusec-report
           path: horusec-report.json
