@@ -1,15 +1,22 @@
 {
-  "horusecCliVersion": "v2.9.0-beta.3",
-  "horusecCliCommands": [
-    "--config-file=horusec-config.json",
-    "--return-error=false",
-    "--json-output-file=horusec-report.json"
-  ],
-  "exclusions": [
-    "**/target/**",
+  "horusecCliFilesOrPathsToIgnore": [
+    "**/.git/**",
     "**/.idea/**",
-    "**/*.wav",
-    "**/*.png",
-    "**/*.jpg"
-  ]
+    "**/.vscode/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/build/**",
+    "**/dist/**",
+    "**/out/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/__pycache__/**",
+    "**/.pytest_cache/**",
+    "**/.mvn/**",
+    "**/.gradle/**",
+    "**/logs/**"
+  ],
+  "horusecCliLogLevel": "info",
+  "horusecCliEnableGitHistoryAnalysis": false,
+  "horusecCliReturnErrorIfFoundVulnerability": true
 }
